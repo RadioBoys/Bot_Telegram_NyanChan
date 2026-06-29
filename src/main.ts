@@ -191,6 +191,62 @@ bot.command("uncheck", async (ctx) => {
     }
 });
 
+bot.command("check", async (ctx) => {
+    // 1. Kiểm tra quyền Admin
+    if (!ADMIN_IDS.includes(ctx.from?.id || 0)) return;
+
+    // 2. Lấy đối tượng và quyền cần bật
+    const args = ctx.message?.text?.split(" ");
+    const targetRight = args?.[1];
+
+    if (!targetRight || !ctx.message?.reply_to_message) {
+        return ctx.reply("Cú pháp: Reply tin nhắn admin đó và dùng: `/check [quyền]`");
+    }
+
+    const userId = ctx.message.reply_to_message.from?.id;
+    if (!userId) return ctx.reply("Không tìm thấy ID người dùng.");
+
+    try {
+        const member = await ctx.api.getChatMember(ctx.chat.id, userId);
+        if (member.status !== "administrator") {
+            return ctx.reply("Người này không phải là Admin.");
+        }
+
+        // Dùng lại cái rightMap cũ
+        const rightMap: { [key: string]: string } = {
+            "manage": "can_manage_chat",
+            "post": "can_post_messages",
+            "edit": "can_edit_messages",
+            "delete": "can_delete_messages",
+            "restrict": "can_restrict_members",
+            "promote": "can_promote_members",
+            "info": "can_change_info",
+            "invite": "can_invite_users",
+            "pin": "can_pin_messages",
+            "video": "can_manage_video_chats",
+            "topics": "can_manage_topics",
+            "stories": "can_post_stories",
+            "edit_stories": "can_edit_stories",
+            "del_stories": "can_delete_stories",
+            "anonymous": "is_anonymous"
+        };
+
+        const telegramRight = rightMap[targetRight.toLowerCase()];
+        if (!telegramRight) return ctx.reply("Quyền không hợp lệ! Chỉ hỗ trợ: anonymous, [pin, post, edit, delete] message, manage, restrict, promote, info, invite, video, topics, stories, edit_stories, del_stories");
+
+        // 3. Cập nhật quyền (bật quyền lên)
+        const currentRights = member as any;
+        currentRights[telegramRight] = true;
+
+        await ctx.api.promoteChatMember(ctx.chat.id, userId, currentRights);
+        
+        ctx.reply(`Đã BẬT quyền '${targetRight}' cho @${ctx.message.reply_to_message.from?.username || userId}`);
+    } catch (e) {
+        console.error(e);
+        ctx.reply("Lỗi: Không thể cấp lại quyền. Bot cần là Admin.");
+    }
+});
+
 bot.command("checkrights", async (ctx) => {
     // 1. Kiểm tra quyền của chính ông (Admin)
     if (!ADMIN_IDS.includes(ctx.from?.id || 0)) {
