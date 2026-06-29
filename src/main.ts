@@ -63,7 +63,7 @@ bot.command("promote", async (ctx) => {
                 can_post_stories: true,       // Quyền đăng Stories (cái bạn đang cần)
                 can_edit_stories: true,       // Quyền sửa Stories
                 can_delete_stories: true,     // Quyền xóa Stories
-                is_anonymous: true
+                is_anonymous: false
             }
         );
 
@@ -132,36 +132,112 @@ bot.command("demote", async (ctx) => {
     }
 });
 
-bot.command("checkrights", async (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from?.id || 0)) {
-        // Gửi tin nhắn cảnh báo
-        const msg = await ctx.reply("Bạn không có quyền sử dụng lệnh này!");
+bot.command("uncheck", async (ctx) => {
+    // 1. Kiểm tra Admin (như các lệnh khác)
+    if (!ADMIN_IDS.includes(ctx.from?.id || 0)) return;
 
-        // Tự động xóa sau 60000ms (60 giây)
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (e) {
-                console.error("Không thể xóa tin nhắn:", e);
-            }
-        }, 60000);
+    // 2. Lấy nội dung lệnh (ví dụ: /uncheck anonymous)
+    const args = ctx.message?.text?.split(" ");
+    const targetRight = args?.[1]; // Ví dụ: 'anonymous', 'delete_messages', v.v.
 
-        return; // Kết thúc lệnh
+    if (!targetRight || !ctx.message?.reply_to_message) {
+        return ctx.reply("Cú pháp: Reply tin nhắn admin đó và dùng: `/uncheck [quyền]`\nCác quyền: anonymous, delete_messages, pin_messages, v.v.");
     }
-    // 1. Kiểm tra xem bot có phải là admin trong group không
-    try {
-        // Lấy thông tin của chính con bot trong group
-        const botMember = await bot.api.getChatMember(ctx.chat.id, bot.botInfo.id);
 
-        if (botMember.status !== "administrator") {
-            return ctx.reply("Bot chưa được cấp quyền Admin trong group này!");
+    const userId = ctx.message.reply_to_message.from?.id;
+    if (!userId) return ctx.reply("Không tìm thấy ID người dùng.");
+
+    try {
+        // 3. Lấy thông tin quyền hạn hiện tại của người đó
+        const member = await ctx.api.getChatMember(ctx.chat.id, userId);
+
+        // Nếu người đó không phải admin, không cần gỡ
+        if (member.status !== "administrator") {
+            return ctx.reply("Người này không phải là Admin.");
         }
 
-        // 2. Liệt kê các quyền mà bot đang có
-        const rights = botMember;
-        let response = "📋 **Quyền hạn hiện tại của Bot trong group:**\n";
+        // 4. Mapping từ tên ngắn gọn sang tên quyền của Telegram API
+        const rightMap: { [key: string]: string } = {
+            "manage": "can_manage_chat",
+            "post": "can_post_messages",
+            "edit": "can_edit_messages",
+            "delete": "can_delete_messages",
+            "restrict": "can_restrict_members",
+            "promote": "can_promote_members",
+            "info": "can_change_info",
+            "invite": "can_invite_users",
+            "pin": "can_pin_messages",
+            "video": "can_manage_video_chats",
+            "topics": "can_manage_topics",
+            "stories": "can_post_stories",
+            "edit_stories": "can_edit_stories",
+            "del_stories": "can_delete_stories",
+            "anonymous": "is_anonymous"
+        };
 
-        // Danh sách các quyền cần check
+        const telegramRight = rightMap[targetRight.toLowerCase()];
+        if (!telegramRight) return ctx.reply("Quyền không hợp lệ! Chỉ hỗ trợ: anonymous, [pin, post, edit, delete] message, manage, restrict, promote, info, invite, video, topics, stories, edit_stories, del_stories");
+
+        // 5. Cập nhật quyền (giữ nguyên các quyền cũ, chỉ tắt quyền chỉ định)
+        const currentRights = member as any;
+        currentRights[telegramRight] = false;
+
+        await ctx.api.promoteChatMember(ctx.chat.id, userId, currentRights);
+
+        ctx.reply(`Đã tắt quyền '${targetRight}' của @${ctx.message.reply_to_message.from?.username || userId}`);
+    } catch (e) {
+        console.error(e);
+        ctx.reply("Lỗi: Không thể cập nhật quyền. Bot cần là Admin và có quyền sửa Admin khác.");
+    }
+});
+
+bot.command("checkrights", async (ctx) => {
+    // 1. Kiểm tra quyền của chính ông (Admin)
+    if (!ADMIN_IDS.includes(ctx.from?.id || 0)) {
+        return ctx.reply("Ông không có quyền check!");
+    }
+
+    // 2. Xác định đối tượng cần check
+    let targetUserId: number | undefined;
+
+    // Cách A: Reply vào tin nhắn của người cần check
+    if (ctx.message?.reply_to_message) {
+        targetUserId = ctx.message.reply_to_message.from?.id;
+    }
+    // Cách B: Gõ lệnh /checkrights @username hoặc ID
+    else {
+        const args = ctx.message?.text?.split(" ");
+
+        if (args && args.length > 1) {
+            const input = args[1];
+
+            // Kiểm tra input có tồn tại và là chuỗi trước khi dùng
+            if (input) {
+                if (input.startsWith("@")) {
+                    return ctx.reply("Vui lòng reply tin nhắn hoặc nhập chính xác ID của người đó.");
+                }
+
+                // Dùng Number() hoặc parseInt với input chắc chắn là string
+                targetUserId = parseInt(input, 10);
+            }
+        }
+    }
+
+    if (!targetUserId) {
+        // Nếu không có đối số nào, mặc định check quyền của chính con Bot (như code cũ của ông)
+        // ... (Giữ nguyên logic cũ của ông ở đây nếu muốn check bot)
+        return ctx.reply("Hãy reply tin nhắn của Admin cần check hoặc gõ /checkrights [ID]");
+    }
+
+    try {
+        const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
+
+        if (member.status !== "administrator" && member.status !== "creator") {
+            return ctx.reply("Người này không phải là Admin.");
+        }
+
+        let response = `📋 **Quyền hạn của @${member.user.username || member.user.id}:**\n`;
+
         const permissionMap: { [key: string]: string } = {
             can_manage_chat: "Quản lý nhóm",
             can_delete_messages: "Xóa tin nhắn",
@@ -174,18 +250,18 @@ bot.command("checkrights", async (ctx) => {
             can_manage_topics: "Quản lý chủ đề",
             can_post_stories: "Đăng Stories",
             can_edit_stories: "Sửa Stories",
-            can_delete_stories: "Xóa Stories"
+            can_delete_stories: "Xóa Stories",
+            is_anonymous: "Ẩn danh"
         };
 
         for (const [key, label] of Object.entries(permissionMap)) {
-            // Kiểm tra xem quyền đó có trong object quyền của bot không
-            const hasRight = (rights as any)[key] === true;
+            const hasRight = (member as any)[key] === true;
             response += `${hasRight ? "✅" : "❌"} ${label}\n`;
         }
 
         ctx.reply(response, { parse_mode: "Markdown" });
     } catch (e) {
-        ctx.reply("Lỗi: Bot không thể đọc quyền hạn trong group này.");
+        ctx.reply("Lỗi: Không thể lấy thông tin người này. Bot có thể chưa được cấp quyền.");
     }
 });
 
@@ -212,8 +288,9 @@ bot.command("help", async (ctx) => {
 1. /start - Kiểm tra trạng thái bot.
 2. /promote - Reply tin nhắn người cần cấp quyền Admin (full quyền).
 3. /demote - Reply tin nhắn người cần gỡ quyền Admin.
-4. /checkrights - Kiểm tra các quyền hạn mà Bot hiện đang sở hữu trong group.
-5. /help - Hiển thị bảng hướng dẫn này.
+4. /uncheck - Chỉnh sửa quyền Admin.
+5. /checkrights - Kiểm tra các quyền hạn mà Bot hiện đang sở hữu trong group.
+6. /help - Hiển thị bảng hướng dẫn này.
 
 ⚠️ **Lưu ý:** 
 - Bạn cần Reply tin nhắn của thành viên khi dùng /promote hoặc /demote.
