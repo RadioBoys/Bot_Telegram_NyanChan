@@ -344,7 +344,7 @@ bot.command("help", async (ctx) => {
 1. /start - Kiểm tra trạng thái bot.
 2. /promote - Reply tin nhắn người cần cấp quyền Admin (full quyền).
 3. /demote - Reply tin nhắn người cần gỡ quyền Admin.
-4. /uncheck - Chỉnh sửa quyền Admin.
+4. /check, /uncheck - Thêm 1 số quyền thiếu của Admin
 5. /checkrights - Kiểm tra các quyền hạn mà Bot hiện đang sở hữu trong group.
 6. /help - Hiển thị bảng hướng dẫn này.
 
