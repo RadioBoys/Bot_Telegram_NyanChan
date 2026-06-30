@@ -2,12 +2,27 @@ import { Bot, Context } from "grammy";
 import * as dotenv from "dotenv";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import express from "express"; // Import express
 
 // Cấu hình để đọc file .env từ thư mục gốc
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const bot = new Bot(process.env.BOT_TOKEN || "");
+
+// 2. Khởi tạo Web Server siêu nhẹ bằng Express
+const app = express();
+const PORT = process.env.PORT || 8080; // Render sẽ tự động gán PORT vào biến môi trường này
+
+// Tạo một đường dẫn gốc (Route) để kiểm tra bot sống
+app.get("/", (req, res) => {
+    res.send("Bot Telegram đang hoạt động 24/7!");
+});
+
+// Bắt đầu lắng nghe cổng Web
+app.listen(PORT, () => {
+    console.log(`✅ Web server đã mở trên port ${PORT} để giữ Render không ngủ.`);
+});
 
 // ID của bạn (Dùng bot @userinfobot để lấy ID Telegram của bạn)
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
@@ -355,5 +370,12 @@ bot.command("help", async (ctx) => {
     ctx.reply(helpMessage, { parse_mode: "Markdown" });
 });
 
-bot.start();
-console.log("Bot đang chạy...");
+// bot.start();
+// console.log("Bot đang chạy...");
+
+// 3. Cuối cùng, khởi chạy Bot
+bot.start({
+    onStart: (botInfo) => {
+        console.log(`✅ Bot @${botInfo.username} đã khởi động!`);
+    }
+});
