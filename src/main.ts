@@ -4,39 +4,41 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import express from "express"; // Import express
 
-// Cấu hình để đọc file .env từ thư mục gốc
+// Setting to read file .env
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const bot = new Bot(process.env.BOT_TOKEN || "");
 
-// 2. Khởi tạo Web Server siêu nhẹ bằng Express
+// Create Web Server
 const app = express();
-const PORT = process.env.PORT || 8080; // Render sẽ tự động gán PORT vào biến môi trường này
+const PORT = process.env.PORT || 8080;
 
-// Tạo một đường dẫn gốc (Route) để kiểm tra bot sống
+// Create route "/" 
 app.get("/", (req, res) => {
     res.send("Bot Telegram đang hoạt động 24/7!");
 });
 
-// Bắt đầu lắng nghe cổng Web
+// Listening port in web
 app.listen(PORT, () => {
     console.log(`✅ Web server đã mở trên port ${PORT} để giữ Render không ngủ.`);
 });
 
-// ID của bạn (Dùng bot @userinfobot để lấy ID Telegram của bạn)
+// Get ID Admin
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
 
-console.log("Danh sách Admin ID:", ADMIN_IDS);
+// ==================================================================
+// Add, edit, delete Admin Permission
+// ==================================================================
 bot.command("start", (ctx) => ctx.reply("Bot quản trị đã sẵn sàng!"));
 
 bot.command("promote", async (ctx) => {
-    // 1. Bảo mật: Chỉ chủ nhân (MY_ID) mới được dùng lệnh này
+    // Check Admin ID
     if (!ADMIN_IDS.includes(ctx.from?.id || 0)) {
-        // Gửi tin nhắn cảnh báo
+        // Message alert
         const msg = await ctx.reply("Bạn không có quyền sử dụng lệnh này!");
 
-        // Tự động xóa sau 60000ms (60 giây)
+        // Auto delete message after 60s
         setTimeout(async () => {
             try {
                 await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
@@ -45,10 +47,10 @@ bot.command("promote", async (ctx) => {
             }
         }, 60000);
 
-        return; // Kết thúc lệnh
+        return;
     }
 
-    // 2. Kiểm tra xem có đang reply tin nhắn không
+    // Check command is reply message of user
     const repliedMessage = ctx.message?.reply_to_message;
     if (!repliedMessage) {
         return ctx.reply("Hãy reply tin nhắn của người bạn muốn cấp quyền admin với lệnh /promote");
@@ -265,7 +267,7 @@ bot.command("check", async (ctx) => {
 bot.command("checkrights", async (ctx) => {
     // 1. Kiểm tra quyền của chính ông (Admin)
     if (!ADMIN_IDS.includes(ctx.from?.id || 0)) {
-        return ctx.reply("Ông không có quyền check!");
+        return ctx.reply("Bạn không có quyền check!");
     }
 
     // 2. Xác định đối tượng cần check
@@ -307,7 +309,7 @@ bot.command("checkrights", async (ctx) => {
             return ctx.reply("Người này không phải là Admin.");
         }
 
-        let response = `📋 **Quyền hạn của @${member.user.username || member.user.id}:**\n`;
+        let response = `📋 -----**Quyền hạn gồm:**-----\n`;
 
         const permissionMap: { [key: string]: string } = {
             can_manage_chat: "Quản lý nhóm",
@@ -335,6 +337,8 @@ bot.command("checkrights", async (ctx) => {
         ctx.reply("Lỗi: Không thể lấy thông tin người này. Bot có thể chưa được cấp quyền.");
     }
 });
+
+
 
 bot.command("help", async (ctx) => {
     if (!ADMIN_IDS.includes(ctx.from?.id || 0)) {
@@ -369,11 +373,11 @@ bot.command("help", async (ctx) => {
 `;
     ctx.reply(helpMessage, { parse_mode: "Markdown" });
 });
+// ==================================================================
 
-// bot.start();
-// console.log("Bot đang chạy...");
 
-// 3. Cuối cùng, khởi chạy Bot
+
+// 3. Run Bot
 bot.start({
     onStart: (botInfo) => {
         console.log(`✅ Bot @${botInfo.username} đã khởi động!`);
