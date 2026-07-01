@@ -2,7 +2,6 @@ import { Bot, Context } from "grammy";
 import * as dotenv from "dotenv";
 import * as path from "path";
 import { fileURLToPath } from "url";
-import express from "express"; // Import express
 
 // Setting to read file .env
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -10,22 +9,14 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const bot = new Bot(process.env.BOT_TOKEN || "");
 
-// Create Web Server
-const app = express();
-const PORT = process.env.PORT || 8080;
-
-// Create route "/" 
-app.get("/", (req, res) => {
-    res.send("Bot Telegram đang hoạt động 24/7!");
-});
-
-// Listening port in web
-app.listen(PORT, () => {
-    console.log(`✅ Web server đã mở trên port ${PORT} để giữ Render không ngủ.`);
-});
-
 // Get ID Admin
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
+
+function getUserId(ctx: any): number | string | undefined {
+    if (ctx.message?.reply_to_message) return ctx.message.reply_to_message.from?.id;
+    const args = ctx.message?.text?.split(" ");
+    return args && args.length > 1 ? args[1] : undefined;
+}
 
 // ==================================================================
 // Add, edit, delete Admin Permission
@@ -397,7 +388,53 @@ bot.command("help", async (ctx) => {
 });
 // ==================================================================
 
+// ==================================================================
+// Restrict Usser : Mute, Unmute, Ban, Unban
+// ==================================================================
+// 1. Mute user
+bot.command("mute", async (ctx) => {
+    if (!ADMIN_IDS.includes(ctx.from?.id || 0)) return;
+    
+    const userId = getUserId(ctx);
+    if (!userId) return ctx.reply("Cú pháp: /mute [ID/@username] hoặc reply tin nhắn.");
 
+    try {
+        await ctx.api.restrictChatMember(ctx.chat.id, Number(userId), {
+            can_send_messages: false,
+            can_send_polls: false,
+            can_send_other_messages: false,
+            can_add_web_page_previews: false
+        });
+        ctx.reply(`Đã Mute user: ${userId}`);
+    } catch (e) { 
+        console.error(e);
+        ctx.reply("Lỗi: Bot không có quyền Mute."); 
+    }
+});
+// 2. Unmute user
+bot.command("unmute", async (ctx) => {
+    if (!ADMIN_IDS.includes(ctx.from?.id || 0)) return;
+
+    const userId = getUserId(ctx);
+    if (!userId) return ctx.reply("Cú pháp: /unmute [ID/@username] hoặc reply tin nhắn.");
+
+    try {
+        await ctx.api.restrictChatMember(ctx.chat.id, Number(userId), {
+            can_send_messages: true,
+            can_send_polls: true,
+            can_send_other_messages: true,
+            can_add_web_page_previews: true,
+            can_change_info: true, // Thêm các quyền cơ bản nếu cần
+            can_invite_users: true,
+            can_pin_messages: true
+        });
+        ctx.reply(`Đã Unmute user: ${userId}`);
+    } catch (e) { 
+        console.error(e);
+        ctx.reply("Lỗi: Không thể Unmute."); 
+    }
+});
+// ==================================================================
 
 // 3. Run Bot
 bot.start({
