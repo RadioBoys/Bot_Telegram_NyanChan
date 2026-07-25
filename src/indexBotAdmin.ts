@@ -683,7 +683,7 @@ BOT_TOKEN.command('mute', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.username ? targetUser.first_name : `@${targetUser.username}`;
+                displayName = targetUser.first_name || `ID ${targetUserId}`;
             }
         } else {
             const args = ctx.match.trim();
@@ -703,7 +703,7 @@ BOT_TOKEN.command('mute', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.username ? member.user.first_name : `@${member.user.username}`;
+                    displayName = member.user.first_name || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -772,7 +772,7 @@ BOT_TOKEN.command('unmute', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.username ? targetUser.first_name : `@${targetUser.username}`;
+                displayName = targetUser.first_name || `ID ${targetUserId}`;
             }
         } else {
             const args = ctx.match.trim();
@@ -792,7 +792,7 @@ BOT_TOKEN.command('unmute', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.username ? member.user.first_name : `@${member.user.username}`;
+                    displayName = member.user.first_name || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -861,7 +861,7 @@ BOT_TOKEN.command('ban', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.username ? targetUser.first_name : `@${targetUser.username}`;
+                displayName = targetUser.first_name || `ID ${targetUserId}`;
             }
         } else {
             const args = ctx.match.trim();
@@ -881,7 +881,7 @@ BOT_TOKEN.command('ban', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.username ? member.user.first_name : `@${member.user.username}`;
+                    displayName = member.user.first_name || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -938,8 +938,7 @@ BOT_TOKEN.command('unban', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                // Đã đảo lại vị trí lấy tên cho chuẩn xác
-                displayName = targetUser.username ? targetUser.first_name : `@${targetUser.username}`;
+                displayName = targetUser.first_name || `ID ${targetUserId}`;;
             }
         } else {
             const args = ctx.match.trim();
@@ -949,7 +948,6 @@ BOT_TOKEN.command('unban', async (ctx) => {
                 return;
             }
 
-            // Bức tường lửa chặn NaN
             if (args.startsWith('@') || isNaN(Number(args))) {
                 const msg = await ctx.reply('❌ Chỉ nhận truyền tham số ID (số) hoặc Reply tin nhắn. Không dùng @username!');
                 setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
@@ -960,8 +958,7 @@ BOT_TOKEN.command('unban', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    // Đã đảo lại vị trí lấy tên cho chuẩn xác
-                    displayName = member.user.username ? member.user.first_name : `@${member.user.username}`;
+                    displayName = member.user.first_name || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
