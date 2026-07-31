@@ -1,5 +1,6 @@
 import { Bot, Context } from 'grammy';
 import * as dotenv from 'dotenv';
+import { upsertUser } from './userModel.js';
 
 dotenv.config();
 
@@ -45,6 +46,27 @@ async function deleteCommandDelay(ctx: Context, delay: number) {
         }
     }, delay);
 }
+
+// ---------------Listen Message---------------
+BOT_TOKEN.on('message', async (ctx, next) => {
+    const user = ctx.from;
+    
+    if (user && !user.is_bot) {
+        const userId = user.id;
+        const username = user.username || '';
+        const firstName = user.first_name || '';
+        const lastName = user.last_name || ''; 
+
+        try {
+            // Gọi hàm cập nhật Database
+            await upsertUser(userId, username, firstName, lastName);
+        } catch (error) {
+            console.error('Lỗi khi lưu user data trong luồng message: ', error);
+        }
+    }
+
+    await next();
+});
 
 // Bot command : /start, /help, /promote, /demote, /check, /uncheck, /checkpermission, /mute, /unmute, /ban, /unban
 // ---------------Slash start---------------
