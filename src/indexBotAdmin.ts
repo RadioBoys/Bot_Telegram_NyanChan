@@ -150,7 +150,7 @@ BOT_TOKEN.command('promote', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from; // <--- LẤY INFO TỪ REPLY
             if (targetUser) {
                 targetUserId = targetUser.id;   // Get ID User from Reply Message
-                displayName = targetUser.username ? `@${targetUser.username}` : targetUser.first_name; // <--- LẤY TÊN
+                displayName = targetUser.username ? `@${targetUser.username}` : `${targetUser.first_name} ${targetUser.last_name}`; // <--- LẤY TÊN
             }
         } else {
             const args = ctx.match.trim();
@@ -168,7 +168,7 @@ BOT_TOKEN.command('promote', async (ctx) => {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
                     const targetUser = member.user;
-                    displayName = targetUser.username ? `@${targetUser.username}` : targetUser.first_name;
+                    displayName = targetUser.username ? `@${targetUser.username}` : `${targetUser.first_name} ${targetUser.last_name}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`; // Đề phòng lỗi
                 }
@@ -241,7 +241,7 @@ BOT_TOKEN.command('demote', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;   // Get ID User from Reply Message
-                displayName = targetUser.username ? `@${targetUser.username}` : targetUser.first_name;
+                displayName = targetUser.username ? `@${targetUser.username}` : `${targetUser.first_name} ${targetUser.last_name}`;
             }
         } else { // <--- Đã đưa else ra ngoài cho ngang hàng với if reply
             const args = ctx.match.trim();
@@ -258,7 +258,7 @@ BOT_TOKEN.command('demote', async (ctx) => {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
                     const targetUser = member.user;
-                    displayName = targetUser.username ? `@${targetUser.username}` : targetUser.first_name;
+                    displayName = targetUser.username ? `@${targetUser.username}` : `${member.user.first_name} ${member.user.last_name}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -352,7 +352,7 @@ BOT_TOKEN.command('check', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.username ? `@${targetUser.username}` : targetUser.first_name;
+                displayName = targetUser.username ? `@${targetUser.username}` : `${targetUser.first_name} ${targetUser.last_name}`;
             }
             requestedPerms = args;  //If reply, All text is a request
         } else {
@@ -376,7 +376,7 @@ BOT_TOKEN.command('check', async (ctx) => {
             if (ctx.chat) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.username ? `@${member.user.username}` : member.user.first_name;
+                    displayName = member.user.username ? `@${member.user.username}` : `${member.user.first_name} ${member.user.last_name}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -493,7 +493,7 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.username ? `@${targetUser.username}` : targetUser.first_name;
+                displayName = targetUser.username ? `@${targetUser.username}` : `${targetUser.first_name} ${targetUser.last_name}`;
             }
             requestedPerms = args;
         } else {
@@ -514,7 +514,7 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
             if (ctx.chat) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.username ? `@${member.user.username}` : member.user.first_name;
+                    displayName = member.user.username ? `@${member.user.username}` : `${member.user.first_name} ${member.user.last_name}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -623,7 +623,7 @@ BOT_TOKEN.command('checkpermission', async (ctx) => {
         const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
 
         const targetUser = member.user;
-        const displayName = targetUser.username ? `@${targetUser.username}` : targetUser.first_name;
+        const displayName = targetUser.username ? `@${targetUser.username}` : `${targetUser.first_name} ${targetUser.last_name}`;
 
         let response = `📋  Quyền hạn của ${displayName} gồm:\n\n`;
 
@@ -683,7 +683,7 @@ BOT_TOKEN.command('mute', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.first_name || `ID ${targetUserId}`;
+                displayName = `${targetUser.first_name} ${targetUser.last_name}` || `ID ${targetUserId}`;
             }
         } else {
             const args = ctx.match.trim();
@@ -703,7 +703,7 @@ BOT_TOKEN.command('mute', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.first_name || `ID ${targetUserId}`;
+                    displayName = `${member.user.first_name} ${member.user.last_name}` || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -735,7 +735,7 @@ BOT_TOKEN.command('mute', async (ctx) => {
             can_add_web_page_previews: false,
         });
 
-        await ctx.reply(`🤬 Một chữ thôi: "<b>${displayName}</b> - IM"!`, { parse_mode: 'HTML' });
+        await ctx.reply(`🤬 Shyyt: Câm miệng lại!\n✅ Muted "<b>${displayName}</b>"`, { parse_mode: 'HTML' });
 
     } catch (error) {
         console.log('Lỗi API lệnh /mute: ', error);
@@ -772,7 +772,7 @@ BOT_TOKEN.command('unmute', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.first_name || `ID ${targetUserId}`;
+                displayName = `${targetUser.first_name} ${targetUser.last_name}` || `ID ${targetUserId}`;
             }
         } else {
             const args = ctx.match.trim();
@@ -792,7 +792,7 @@ BOT_TOKEN.command('unmute', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.first_name || `ID ${targetUserId}`;
+                    displayName = `${member.user.first_name} ${member.user.last_name}` || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -861,7 +861,7 @@ BOT_TOKEN.command('ban', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.first_name || `ID ${targetUserId}`;
+                displayName = `${targetUser.first_name} ${targetUser.last_name}` || `ID ${targetUserId}`;
             }
         } else {
             const args = ctx.match.trim();
@@ -881,7 +881,7 @@ BOT_TOKEN.command('ban', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.first_name || `ID ${targetUserId}`;
+                    displayName = `${member.user.first_name} ${member.user.last_name}` || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
@@ -901,7 +901,7 @@ BOT_TOKEN.command('ban', async (ctx) => {
 
     try {
         await ctx.api.banChatMember(ctx.chat.id, targetUserId);
-        await ctx.reply(`✅ Đã tiễn <b>${displayName}</b> ra đảo!`, { parse_mode: 'HTML' });
+        await ctx.reply(`Đã tiễn <b>${displayName}</b> ra đảo!\n\n✅ <b>Banned!</b>`, { parse_mode: 'HTML' });
 
     } catch (error) {
         console.log('Lỗi API lệnh /ban: ', error);
@@ -938,7 +938,7 @@ BOT_TOKEN.command('unban', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.first_name || `ID ${targetUserId}`;;
+                displayName = `${targetUser.first_name} ${targetUser.last_name}` || `ID ${targetUserId}`;;
             }
         } else {
             const args = ctx.match.trim();
@@ -958,7 +958,7 @@ BOT_TOKEN.command('unban', async (ctx) => {
             if (ctx.chat && targetUserId) {
                 try {
                     const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    displayName = member.user.first_name || `ID ${targetUserId}`;
+                    displayName = `${member.user.first_name} ${member.user.last_name}` || `ID ${targetUserId}`;
                 } catch (error) {
                     displayName = `ID ${targetUserId}`;
                 }
