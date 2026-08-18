@@ -1,93 +1,144 @@
+// ==========================================
+// FILE: ./src/indexBotAdmin.ts
+// ==========================================
+
 import { Bot, Context } from 'grammy';
 import * as dotenv from 'dotenv';
-import { upsertUser } from './userModel.js';
+// Cập nhật import thêm hàm getIdFromUsername từ userModel
+import { upsertUser, getIdFromUsername } from './userModel.js';
 
 dotenv.config();
 
-const BOT_TOKEN = new Bot(process.env.BOT_TOKEN || '');    // Get Bot token
-const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];         // Get Admin Id (Hard Code)
+const BOT_TOKEN = new Bot(process.env.BOT_TOKEN_TEST || process.env.BOT_TOKEN || '');
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
 
-// Function check admin hard code and admin in Channel / Group
 // ---------------Admin hard code---------------
 export function isAdminHardCode(userId: number | undefined): boolean {
-    if (!userId) {
-        return false;
-    }
+    if (!userId) return false;
     return ADMIN_IDS.includes(userId);
-};
+}
 
 // ---------------Admin Channel / Group---------------
 export async function isGroupChannelAdmin(ctx: Context, userId?: number): Promise<boolean> {
     const targetId = userId || ctx.from?.id;
     if (!targetId || !ctx.chat) return false;
-
-    // Check chat is private?
     if (ctx.chat.type === 'private') return false;
 
     try {
-        // Get info member
         const member = await ctx.api.getChatMember(ctx.chat.id, targetId);
-        // Check permission of member
-        return member.status === "administrator" || member.status === "creator"
+        return member.status === "administrator" || member.status === "creator";
     } catch (err) {
-        console.log('Admin Group/Channel: ', err);
+        console.log('Admin Group/Channel (Không có quyền hoặc user không tồn tại): ', (err as Error).message);
         return false;
     }
-};
+}
 
-// Delete command after delay
+// ---------------Delete command after delay---------------
 async function deleteCommandDelay(ctx: Context, delay: number) {
     if (ctx.chat?.type === 'private') return;
     setTimeout(async () => {
         try {
             await ctx.deleteMessage();
         } catch (err) {
-            console.log("Lỗi khi xóa lệnh: ", err);
+            // console.log("Lỗi khi xóa lệnh: ", err.message);
         }
     }, delay);
 }
 
-// ---------------Listen Message---------------
+// ==========================================
+// HÀM HELPER: LẤY ID & ĐỊNH DẠNG TÊN XỊN XÒ
+// ==========================================
+export async function resolveTargetUser(ctx: Context, userArg?: string) {
+    let targetUserId: number | undefined;
+    let targetUser: import("grammy/types").User | undefined;
+    let displayName = "User";
+
+    // Ưu tiên 1: Lấy từ Reply
+    if (ctx.message?.reply_to_message) {
+        targetUser = ctx.message.reply_to_message.from;
+        targetUserId = targetUser?.id;
+    } 
+    // Ưu tiên 2: Lấy từ tham số truyền vào (userArg)
+    else {
+        if (!userArg) {
+            return { error: '⚠️ Vui lòng Reply tin nhắn hoặc nhập tham số (ID / @username)' };
+        }
+
+        if (userArg.startsWith('@')) {
+            // Dò trong Database bằng SQL
+            const dbId = await getIdFromUsername(userArg);
+            if (dbId) {
+                targetUserId = dbId;
+            } else {
+                return { error: `❌ Không tìm thấy thông tin ${userArg} trong Database.\nYêu cầu người này chat 1 câu vào nhóm, hoặc dùng ID số/Reply tin nhắn!` };
+            }
+        } else if (!isNaN(Number(userArg))) {
+            // Truyền bằng ID số
+            targetUserId = Number(userArg);
+        } else {
+            return { error: '❌ Tham số đầu tiên bắt buộc phải là ID (số), @username hoặc Reply tin nhắn!' };
+        }
+    }
+
+    // Lấy thông tin user hiện tại từ API Telegram để đảm bảo Tên / Quyền hạn luôn mới nhất
+    if (ctx.chat && targetUserId && !targetUser) {
+        try {
+            const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
+            targetUser = member.user;
+        } catch (error) {
+            // Bỏ qua lỗi nếu họ rời nhóm, sẽ Fallback về ID
+        }
+    }
+
+    // ĐỊNH DẠNG TÊN: Full Name -> @username -> ID
+    if (targetUser) {
+        const firstName = targetUser.first_name || '';
+        const lastName = targetUser.last_name || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+
+        displayName = fullName ? fullName : (targetUser.username ? `@${targetUser.username}` : `ID ${targetUserId}`);
+    } else if (targetUserId) {
+        displayName = `ID ${targetUserId}`;
+    }
+
+    if (!targetUserId) {
+        return { error: '❌ Không tìm thấy ID người dùng.' };
+    }
+
+    return { targetUserId, displayName, targetUser };
+}
+
+
+// ---------------Listen Message & UPSERT DATABASE---------------
 BOT_TOKEN.on('message', async (ctx, next) => {
     const user = ctx.from;
-
     if (user && !user.is_bot) {
-        const userId = user.id;
-        const username = user.username || '';
-        const firstName = user.first_name || '';
-        const lastName = user.last_name || '';
-
         try {
-            // Gọi hàm cập nhật Database
-            await upsertUser(userId, username, firstName, lastName);
+            await upsertUser(user.id, user.username || '', user.first_name || '', user.last_name || '');
         } catch (error) {
             console.error('Lỗi khi lưu user data trong luồng message: ', error);
         }
     }
-
     await next();
 });
 
-// Bot command : /start, /help, /promote, /demote, /check, /uncheck, /checkpermission, /mute, /unmute, /ban, /unban
+
+// ==========================================
+// CÁC LỆNH ADMIN (COMMANDS)
+// ==========================================
+
 // ---------------Slash start---------------
 BOT_TOKEN.command('start', async (ctx) => {
     const userId = ctx.from?.id;
-    // Check permission admin
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
     if (!isHardAdmin && !isChatAdmin) {
-        // Dành cho thành viên bình thường
         const msg = await ctx.reply("Chỉ Admin mới có thể sử dụng lệnh này!", { parse_mode: "Markdown" });
-        try {
-            setTimeout(async () => {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            }, 5000);
-        } catch (error) {
-            console.log('Lỗi không xóa được bảng cảnh cáo ', error);
-        }
+        setTimeout(async () => {
+            try { await ctx.api.deleteMessage(ctx.chat!.id, msg.message_id); } catch (e) {}
+        }, 5000);
     } else {
-        // Dành cho Admin (Hardcode hoặc Group Admin)
         await ctx.reply("Muốn xem thử Bot làm được gì không? Ấn `/help` đi là biết 😏!", { parse_mode: "Markdown" });
     }
     await deleteCommandDelay(ctx, 5000);
@@ -96,122 +147,62 @@ BOT_TOKEN.command('start', async (ctx) => {
 // ---------------Slash help---------------
 BOT_TOKEN.command('help', async (ctx) => {
     const userId = ctx.from?.id;
-
     const helpMessage = `
     🤖 **Danh sách lệnh quản trị của Bot:**
 
 1. /start - Kiểm tra trạng thái bot.
-2. /promote [id, reply] - Cấp quyền Admin cho User.
-3. /demote [id, reply] - Gỡ quyền Admin User.
-4. /check | /uncheck [id, reply] [All, Permission] - Thêm / xóa 1 hoặc tất cả các quyền của Admin
-5. /checkpermission [id, reply] - Kiểm tra quyền Admin của User.
+2. /promote [id, @username, reply] - Cấp quyền Admin cho User.
+3. /demote [id, @username, reply] - Gỡ quyền Admin User.
+4. /check | /uncheck [id, @username, reply] [All, Permission] - Thêm / xóa 1 hoặc tất cả quyền Admin.
+5. /checkpermission [id, @username, reply] - Kiểm tra quyền Admin của User.
 6. /help - Hiển thị bảng hướng dẫn này.
 
-⚠️ **Lưu ý:** - Bạn cần Reply tin nhắn của thành viên khi dùng /promote hoặc /demote.
-- Bot chỉ thực hiện lệnh nếu bạn nằm trong danh sách Admin được chỉ định.
+⚠️ **Lưu ý:** - Bot tự động tra cứu @username qua SQL Database.
     `;
 
     try {
-        // Check permission admin
         const isHardAdmin = isAdminHardCode(userId);
         const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
         if (!isHardAdmin && !isChatAdmin) {
             const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
-
             setTimeout(async () => {
-                try {
-                    await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-                } catch (err) {
-                    console.log('Lỗi không xóa được bảng help:', err);
-                }
+                try { await ctx.api.deleteMessage(ctx.chat!.id, msg.message_id); } catch (e) {}
             }, 5000);
-
             return;
         }
-        // Delete slash user
-        await deleteCommandDelay(ctx, 5000);
-        await ctx.reply(helpMessage);
 
+        await deleteCommandDelay(ctx, 5000);
+        await ctx.reply(helpMessage, { parse_mode: "Markdown" });
     } catch (err) {
         console.log('Lỗi lệnh /help: ', err);
-        try {
-            await ctx.reply('⚠️ Có lỗi xảy ra khi hiển thị bảng trợ giúp!');
-        } catch (replyErr) {
-            console.error('Không thể gửi tin nhắn báo lỗi:', replyErr);
-        }
     }
 });
 
 // ---------------Slash promote---------------
 BOT_TOKEN.command('promote', async (ctx) => {
-    // Only hard code Admin can do this
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group/Channel!");
+    
     const userId = ctx.from?.id;
-    const isHardAdmin = isAdminHardCode(userId);
-
-    if (!isHardAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Boss hoặc NyanChan mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được lệnh /promote', error);
-            }
-        }, 5000);
+    if (!isAdminHardCode(userId)) {
+        const msg = await ctx.reply("❌ Chỉ Boss hoặc NyanChan mới có thể cấp quyền Admin!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    // Get ID User from reply message OR /promote [ID]
-    let targetUserId: number | undefined;
-    let displayName = "User"; // <--- THÊM BIẾN TÊN HIỂN THỊ
-
-    try {
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            const firstName = targetUser?.first_name || '';
-            const lastName = targetUser?.last_name || '';
-            if (targetUser) {
-                targetUserId = targetUser.id;   // Get ID User from Reply Message
-                displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-        } else {
-            const args = ctx.match.trim();
-            if (!args) {
-                return await ctx.reply('Reply tin nhắn hoặc nhập /promote [ID]');
-            }
-
-            if (args.startsWith('@') || isNaN(Number(args))) {
-                return await ctx.reply('Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User');
-            }
-            targetUserId = Number(args);    // Get ID User from /promote [ID]
-
-            // <--- THÊM LOGIC GỌI API LẤY TÊN NẾU NHẬP BẰNG ID --->
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const targetUser = member.user;
-                    const firstName = targetUser?.first_name || '';
-                    const lastName = targetUser?.last_name || '';
-                    displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`; // Đề phòng lỗi
-                }
-            }
-        }
-
-        if (!targetUserId) {
-            return ctx.reply('Không tìm thấy ID User ');
-        }
-    } catch (error) {
-        console.log('Lỗi lệnh /promote: ', error);
+    const args = ctx.match.trim().split(/\s+/).filter(a => a);
+    const userArg = ctx.message?.reply_to_message ? undefined : args[0];
+    
+    const resolved = await resolveTargetUser(ctx, userArg);
+    if (resolved.error) {
+        const msg = await ctx.reply(resolved.error);
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
 
     try {
-        // Add permission Admin
-        await ctx.api.promoteChatMember(ctx.chat.id, targetUserId, {
+        await ctx.api.promoteChatMember(ctx.chat!.id, resolved.targetUserId!, {
             can_manage_chat: true,
             can_post_messages: false,
             can_edit_messages: false,
@@ -228,84 +219,37 @@ BOT_TOKEN.command('promote', async (ctx) => {
             can_delete_stories: false,
             is_anonymous: false
         });
-        // <--- ĐỔI targetUserId THÀNH displayName Ở ĐÂY --->
-        await ctx.reply(`✅ Đã cấp quyền Admin cho <b>${displayName}</b>`, { parse_mode: 'HTML' });
+        await ctx.reply(`✅ Đã cấp quyền Admin cơ bản cho <b>${resolved.displayName}</b>`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi lệnh /promote: ', error);
-        return await ctx.reply('⚠️ Lỗi: Không thể cấp quyền Admin');
+        console.log('Lỗi lệnh /promote: ', (error as Error).message);
+        return await ctx.reply('⚠️ Lỗi: Không thể cấp quyền Admin. Bot chưa đủ quyền hạn!');
     }
-
 });
 
 // ---------------Slash demote---------------
 BOT_TOKEN.command('demote', async (ctx) => {
-    // ONLY hardcode admin can do this
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group/Channel!");
+    
     const userId = ctx.from?.id;
-    const isHardAdmin = isAdminHardCode(userId);
-
-    if (!isHardAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Boss hoặc NyanChan mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được lệnh /demote', error);
-            }
-        }, 5000);
+    if (!isAdminHardCode(userId)) {
+        const msg = await ctx.reply("❌ Chỉ Boss hoặc NyanChan mới có thể gỡ quyền Admin!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    // Get ID User from reply message OR /demote [ID]
-    let targetUserId: number | undefined;
-    let displayName = "User";
-
-    try {
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            const firstName = targetUser?.first_name || '';
-            const lastName = targetUser?.last_name || '';
-            if (targetUser) {
-                targetUserId = targetUser.id;   // Get ID User from Reply Message
-                displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-        } else { // <--- Đã đưa else ra ngoài cho ngang hàng với if reply
-            const args = ctx.match.trim();
-            if (!args) {
-                return await ctx.reply('Reply tin nhắn hoặc nhập /demote [ID]');
-            }
-
-            if (args.startsWith('@') || isNaN(Number(args))) {
-                return await ctx.reply('Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User');
-            }
-            targetUserId = Number(args);    // Get ID User from /demote [ID]
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const targetUser = member.user;
-                    const firstName = targetUser?.first_name || '';
-                    const lastName = targetUser?.last_name || '';
-                    displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
-        }
-
-        if (!targetUserId) {
-            return ctx.reply('Không tìm thấy ID User ');
-        }
-
-    } catch (error) {
-        console.log('Lỗi lệnh /demote: ', error);
+    const args = ctx.match.trim().split(/\s+/).filter(a => a);
+    const userArg = ctx.message?.reply_to_message ? undefined : args[0];
+    
+    const resolved = await resolveTargetUser(ctx, userArg);
+    if (resolved.error) {
+        const msg = await ctx.reply(resolved.error);
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
 
     try {
-        await ctx.api.promoteChatMember(ctx.chat.id, targetUserId as number, {
+        await ctx.api.promoteChatMember(ctx.chat!.id, resolved.targetUserId!, {
             can_manage_chat: false,
             can_post_messages: false,
             can_edit_messages: false,
@@ -321,141 +265,73 @@ BOT_TOKEN.command('demote', async (ctx) => {
             can_edit_stories: false,
             can_delete_stories: false,
             is_anonymous: false
-        })
-        await ctx.reply(`✅ Gỡ Admin <b>${displayName}</b> thành công`, { parse_mode: 'HTML' });
-
+        });
+        await ctx.reply(`✅ Gỡ Admin <b>${resolved.displayName}</b> thành công`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi lệnh /demote: ', error);
         return await ctx.reply('⚠️ Lỗi: Không thể gỡ quyền Admin');
     }
 });
 
-// ---------------Slash check---------------
+// ---------------Slash check (Cấp thêm quyền)---------------
 BOT_TOKEN.command('check', async (ctx) => {
-    // Only Hard Code Admin can do this
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group!");
+    
     const userId = ctx.from?.id;
-    const isHardAdmin = isAdminHardCode(userId);
-
-    if (!isHardAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Boss hoặc NyanChan mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được cảnh báo', error);
-            }
-        }, 5000);
+    if (!isAdminHardCode(userId)) {
+        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    let targetUserId: number | undefined;
-    let displayName = "User";
-    let requestedPerms: string[] = [];
-
     const rightMap: { [key: string]: keyof import("grammy/types").ChatAdministratorRights } = {
-        "manage": "can_manage_chat",
-        "post": "can_post_messages",
-        "edit": "can_edit_messages",
-        "delete": "can_delete_messages",
-        "restrict": "can_restrict_members",
-        "promote": "can_promote_members",
-        "info": "can_change_info",
-        "invite": "can_invite_users",
-        "pin": "can_pin_messages",
-        "video": "can_manage_video_chats",
-        "topics": "can_manage_topics",
-        "stories": "can_post_stories",
-        "edit_stories": "can_edit_stories",
-        "del_stories": "can_delete_stories",
-        "anonymous": "is_anonymous"
+        "manage": "can_manage_chat", "post": "can_post_messages", "edit": "can_edit_messages",
+        "delete": "can_delete_messages", "restrict": "can_restrict_members", "promote": "can_promote_members",
+        "info": "can_change_info", "invite": "can_invite_users", "pin": "can_pin_messages",
+        "video": "can_manage_video_chats", "topics": "can_manage_topics", "stories": "can_post_stories",
+        "edit_stories": "can_edit_stories", "del_stories": "can_delete_stories", "anonymous": "is_anonymous"
     };
 
     try {
-        // Split remove space
         const args = ctx.match.trim().split(/\s+/).filter(a => a);
+        const isReply = !!ctx.message?.reply_to_message;
+        const userArg = isReply ? undefined : args[0];
+        const requestedPerms = isReply ? args : args.slice(1);
 
-        // If reply
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            if (targetUser) {
-                targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-            requestedPerms = args;  //If reply, All text is a request
-        } else {
-            // If user enter have [ID]
-            if (args.length < 2) {
-                return await ctx.reply(`⚠️ Không nhận diện được quyền nào.\nCác quyền hợp lệ: \n<code>${Object.keys(rightMap).join('\n')}\n\nall - Tất cả quyền</code>`, { parse_mode: 'HTML' });
-
-            }
-
-            const idArg = args[0];  // Get ID User;
-            if (!idArg) {
-                return await ctx.reply("Truyền đúng ID User hoặc reply tin nhắn User!");
-            }
-            if (idArg.startsWith('@') || isNaN(Number(idArg))) {
-                return await ctx.reply('❌ Tham số đầu tiên bắt buộc phải là **ID số**!', { parse_mode: 'Markdown' });
-            }
-            targetUserId = Number(idArg);
-            requestedPerms = args.slice(1);
-
-            // Get name of User
-            if (ctx.chat) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
-        }
-        if (!targetUserId || !ctx.chat) {
-            return await ctx.reply('❌ Không tìm thấy ID User.');
+        const resolved = await resolveTargetUser(ctx, userArg);
+        if (resolved.error) {
+            const msg = await ctx.reply(resolved.error);
+            setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
+            return;
         }
 
-        const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-        if (member.status === 'creator') {
-            return await ctx.reply("Owner luôn full quyền");
+        if (requestedPerms.length === 0) {
+            return await ctx.reply(`⚠️ Không nhận diện được quyền nào.\nCác quyền hợp lệ: \n<code>${Object.keys(rightMap).join(', ')}, all</code>`, { parse_mode: 'HTML' });
         }
 
-        // Create permission and doesn't lost previous permission
+        const member = await ctx.api.getChatMember(ctx.chat!.id, resolved.targetUserId!);
+        if (member.status === 'creator') return await ctx.reply("Owner luôn full quyền!");
+
         const newPermission: any = { can_manage_topics: false, is_anonymous: false };
-
         if (member.status === 'administrator') {
             for (const key of Object.values(rightMap)) {
                 newPermission[key] = (member as any)[key] || false;
             }
         } else {
-            for (const key of Object.values(rightMap)) {
-                newPermission[key] = false;
-            }
+            for (const key of Object.values(rightMap)) newPermission[key] = false;
         }
 
-        // Tick permission
         let updatedCount = 0;
         const isAll = requestedPerms.map(p => p.toLowerCase()).includes('all');
 
         if (isAll) {
             for (const key of Object.values(rightMap)) {
                 if (key === "can_manage_topics") {
-                    // Kiểm tra xem nhóm hiện tại có phải là Supergroup và có bật tính năng Topic (Forum) không
-                    if (ctx.chat && ctx.chat.type === 'supergroup' && ctx.chat.is_forum) {
-                        newPermission[key] = true;
-                    } else {
-                        newPermission[key] = false;
-                    }
+                    newPermission[key] = !!(ctx.chat && ctx.chat.type === 'supergroup' && ctx.chat.is_forum);
                 } else {
                     newPermission[key] = true;
                 }
             }
-            // Đếm linh hoạt số lượng quyền thực tế đã được set thành true
             updatedCount = Object.values(newPermission).filter(v => v === true).length;
         } else {
             for (const p of requestedPerms) {
@@ -466,115 +342,60 @@ BOT_TOKEN.command('check', async (ctx) => {
                 }
             }
         }
+
         if (updatedCount === 0) {
-            return await ctx.reply(`⚠️ Không nhận diện được quyền nào.\nCác quyền hợp lệ: <code>${Object.keys(rightMap).join(', ')}, all</code>`, { parse_mode: 'HTML' });
+            return await ctx.reply(`⚠️ Bạn gõ sai tên quyền.\nHợp lệ: <code>${Object.keys(rightMap).join(', ')}, all</code>`, { parse_mode: 'HTML' });
         }
-        await ctx.api.promoteChatMember(ctx.chat.id, targetUserId, newPermission);
-        await ctx.reply(`✅ Đã tick thêm <b>${isAll ? 'TẤT CẢ' : updatedCount}</b> quyền cho Admin <b>${displayName}</b>!`, { parse_mode: 'HTML' });
+
+        await ctx.api.promoteChatMember(ctx.chat!.id, resolved.targetUserId!, newPermission);
+        await ctx.reply(`✅ Đã tick thêm <b>${isAll ? 'TẤT CẢ' : updatedCount}</b> quyền cho Admin <b>${resolved.displayName}</b>!`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi lệnh /check: ', error);
-        return await ctx.reply('⚠️ Lỗi: Không thể sửa quyền cho người này. Đảm bảo Bot có đủ quyền hạn và cao hơn chức vụ của người đó!');
+        return await ctx.reply('⚠️ Lỗi: Không thể sửa quyền cho người này.');
     }
-})
+});
 
-// ---------------Slash uncheck---------------
+// ---------------Slash uncheck (Gỡ quyền)---------------
 BOT_TOKEN.command('uncheck', async (ctx) => {
-    // Only Hard Code Admin can do this
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group!");
+    
     const userId = ctx.from?.id;
-    const isHardAdmin = isAdminHardCode(userId);
-
-    if (!isHardAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Boss hoặc NyanChan mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được cảnh báo', error);
-            }
-        }, 5000);
+    if (!isAdminHardCode(userId)) {
+        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    let targetUserId: number | undefined;
-    let displayName = "User";
-    let requestedPerms: string[] = [];
-
     const rightMap: { [key: string]: keyof import("grammy/types").ChatAdministratorRights } = {
-        "manage": "can_manage_chat",
-        "post": "can_post_messages",
-        "edit": "can_edit_messages",
-        "delete": "can_delete_messages",
-        "restrict": "can_restrict_members",
-        "promote": "can_promote_members",
-        "info": "can_change_info",
-        "invite": "can_invite_users",
-        "pin": "can_pin_messages",
-        "video": "can_manage_video_chats",
-        "topics": "can_manage_topics",
-        "stories": "can_post_stories",
-        "edit_stories": "can_edit_stories",
-        "del_stories": "can_delete_stories",
-        "anonymous": "is_anonymous"
+        "manage": "can_manage_chat", "post": "can_post_messages", "edit": "can_edit_messages",
+        "delete": "can_delete_messages", "restrict": "can_restrict_members", "promote": "can_promote_members",
+        "info": "can_change_info", "invite": "can_invite_users", "pin": "can_pin_messages",
+        "video": "can_manage_video_chats", "topics": "can_manage_topics", "stories": "can_post_stories",
+        "edit_stories": "can_edit_stories", "del_stories": "can_delete_stories", "anonymous": "is_anonymous"
     };
 
     try {
         const args = ctx.match.trim().split(/\s+/).filter(a => a);
+        const isReply = !!ctx.message?.reply_to_message;
+        const userArg = isReply ? undefined : args[0];
+        const requestedPerms = isReply ? args : args.slice(1);
 
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            const firstName = targetUser?.first_name || '';
-            const lastName = targetUser?.last_name || '';
-            if (targetUser) {
-                targetUserId = targetUser.id;
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-            requestedPerms = args;
-        } else {
-            if (args.length < 2) {
-                return await ctx.reply(`⚠️ Không nhận diện được quyền nào cần gỡ.\nCác quyền hợp lệ: \n<code>${Object.keys(rightMap).join('\n')}\n\nall - Gỡ tất cả quyền</code>`, { parse_mode: 'HTML' });
-            }
-
-            const idArg = args[0];
-            if (!idArg) {
-                return await ctx.reply("Truyền đúng ID User hoặc reply tin nhắn User!");
-            }
-            if (idArg.startsWith('@') || isNaN(Number(idArg))) {
-                return await ctx.reply('❌ Tham số đầu tiên bắt buộc phải là **ID số**!', { parse_mode: 'Markdown' });
-            }
-            targetUserId = Number(idArg);
-            requestedPerms = args.slice(1);
-
-            if (ctx.chat) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+        const resolved = await resolveTargetUser(ctx, userArg);
+        if (resolved.error) {
+            const msg = await ctx.reply(resolved.error);
+            setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
+            return;
         }
 
-        if (!targetUserId || !ctx.chat) {
-            return await ctx.reply('❌ Không tìm thấy ID User.');
+        if (requestedPerms.length === 0) {
+            return await ctx.reply(`⚠️ Cần cung cấp quyền.\nHợp lệ: <code>${Object.keys(rightMap).join(', ')}, all</code>`, { parse_mode: 'HTML' });
         }
 
-        const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
-        if (member.status === 'creator') {
-            return await ctx.reply("❌ Owner luôn full quyền, không thể gỡ (Uncheck)!");
-        }
-
-        if (member.status !== 'administrator') {
-            return await ctx.reply("⚠️ Người này hiện không phải là Admin, không có quyền nào để gỡ!");
-        }
+        const member = await ctx.api.getChatMember(ctx.chat!.id, resolved.targetUserId!);
+        if (member.status === 'creator') return await ctx.reply("❌ Owner luôn full quyền, không thể gỡ!");
+        if (member.status !== 'administrator') return await ctx.reply("⚠️ Người này hiện không phải là Admin!");
 
         const newPermission: any = { can_manage_topics: false, is_anonymous: false };
-
         for (const key of Object.values(rightMap)) {
             newPermission[key] = (member as any)[key] || false;
         }
@@ -583,16 +404,11 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
         const isAll = requestedPerms.map(p => p.toLowerCase()).includes('all');
 
         if (isAll) {
-            // Nếu là all, cho tất cả về false
-            for (const key of Object.values(rightMap)) {
-                newPermission[key] = false;
-            }
-
+            for (const key of Object.values(rightMap)) newPermission[key] = false;
             removedCount = Object.values(rightMap).filter(key => (member as any)[key] === true).length;
         } else {
             for (const p of requestedPerms) {
                 const permKey = rightMap[p.toLowerCase()];
-
                 if (permKey && newPermission[permKey] === true) {
                     newPermission[permKey] = false;
                     removedCount++;
@@ -601,86 +417,52 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
         }
 
         if (removedCount === 0 && !isAll) {
-            return await ctx.reply(`⚠️ Người này không có sẵn các quyền bạn yêu cầu gỡ, hoặc bạn gõ sai tên quyền.\nCác quyền hợp lệ: <code>${Object.keys(rightMap).join(', ')}, all</code>`, { parse_mode: 'HTML' });
+            return await ctx.reply(`⚠️ Không có sẵn các quyền bạn yêu cầu gỡ.\nHợp lệ: <code>${Object.keys(rightMap).join(', ')}, all</code>`, { parse_mode: 'HTML' });
         }
 
-        await ctx.api.promoteChatMember(ctx.chat.id, targetUserId, newPermission);
-        await ctx.reply(`✅ Đã gỡ bỏ <b>${isAll ? 'TẤT CẢ' : removedCount}</b> quyền của Admin <b>${displayName}</b>!`, { parse_mode: 'HTML' });
-
+        await ctx.api.promoteChatMember(ctx.chat!.id, resolved.targetUserId!, newPermission);
+        await ctx.reply(`✅ Đã gỡ bỏ <b>${isAll ? 'TẤT CẢ' : removedCount}</b> quyền của Admin <b>${resolved.displayName}</b>!`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi lệnh /uncheck: ', error);
-        return await ctx.reply('⚠️ Lỗi: Không thể sửa quyền cho người này. Đảm bảo Bot có đủ quyền hạn và cao hơn chức vụ của người đó!');
+        return await ctx.reply('⚠️ Lỗi: Không thể sửa quyền cho người này.');
     }
 });
+
 // ---------------Slash checkpermission---------------
 BOT_TOKEN.command('checkpermission', async (ctx) => {
-    // Only Admin can do this
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group!");
+
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
     if (!isHardAdmin && !isChatAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Admin mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được cảnh báo', error);
-            }
-        }, 5000);
+        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    // Get ID User from reply message OR /promote [ID]
-    let targetUserId: number | undefined;
-    try {
-        // Get ID user from reply message
-        if (ctx.message?.reply_to_message) {
-            targetUserId = ctx.message.reply_to_message.from?.id;
-        } else {
-            const agrs = ctx.match.trim();
-            if (!agrs) {
-                return await ctx.reply('Reply tin nhắn hoặc nhập /checkpermission [ID]');
-            }
-            if (agrs.startsWith('@') || isNaN(Number(agrs))) {
-                return await ctx.reply('Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User');
-            }
-            targetUserId = Number(agrs);
-        }
-        if (!targetUserId) {
-            return await ctx.reply('Không tìm thấy ID User');
-        }
-    } catch (error) {
-        console.log('Lỗi lệnh /checkpermission: ', error);
+    const args = ctx.match.trim().split(/\s+/).filter(a => a);
+    const userArg = ctx.message?.reply_to_message ? undefined : args[0];
+    
+    const resolved = await resolveTargetUser(ctx, userArg);
+    if (resolved.error) {
+        const msg = await ctx.reply(resolved.error);
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
 
     try {
-        const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
-        const targetUser = member.user;
-        const firstName = targetUser.first_name || '';
-        const lastName = targetUser.last_name || '';
-        const displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-
-        let response = `📋  Quyền hạn của ${displayName} gồm:\n\n`;
-
+        const member = await ctx.api.getChatMember(ctx.chat!.id, resolved.targetUserId!);
+        
+        let response = `📋  Quyền hạn của **${resolved.displayName}** gồm:\n\n`;
         const permissionMap: { [key: string]: string } = {
-            can_manage_chat: "Quản lý nhóm",
-            can_delete_messages: "Xóa tin nhắn",
-            can_pin_messages: "Ghim tin nhắn",
-            can_restrict_members: "Chặn thành viên",
-            can_promote_members: "Thêm quản trị viên mới",
-            can_change_info: "Thay đổi thông tin nhóm",
-            can_invite_users: "Mời thành viên",
-            can_manage_video_chats: "Quản lý video chat",
-            can_manage_topics: "Quản lý chủ đề",
-            can_post_stories: "Đăng Stories",
-            can_edit_stories: "Sửa Stories",
-            can_delete_stories: "Xóa Stories",
-            is_anonymous: "Ẩn danh"
+            can_manage_chat: "Quản lý nhóm", can_delete_messages: "Xóa tin nhắn",
+            can_pin_messages: "Ghim tin nhắn", can_restrict_members: "Chặn thành viên",
+            can_promote_members: "Thêm quản trị viên mới", can_change_info: "Thay đổi thông tin nhóm",
+            can_invite_users: "Mời thành viên", can_manage_video_chats: "Quản lý video chat",
+            can_manage_topics: "Quản lý chủ đề", can_post_stories: "Đăng Stories",
+            can_edit_stories: "Sửa Stories", can_delete_stories: "Xóa Stories", is_anonymous: "Ẩn danh"
         };
 
         for (const [key, label] of Object.entries(permissionMap)) {
@@ -688,362 +470,153 @@ BOT_TOKEN.command('checkpermission', async (ctx) => {
             response += `${hasRight ? "✅" : "❌"} ${label}\n`;
         }
 
-        ctx.reply(response, { parse_mode: "Markdown" });
+        await ctx.reply(response, { parse_mode: "Markdown" });
     } catch (e) {
-        ctx.reply("Lỗi: Không thể lấy thông tin người này. Bot có thể chưa được cấp quyền.");
+        await ctx.reply("Lỗi: Không thể lấy thông tin người này.");
     }
 });
 
 // ---------------Slash mute---------------
 BOT_TOKEN.command('mute', async (ctx) => {
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group/Supergroup!");
+
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
     if (!isHardAdmin && !isChatAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Admin mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được cảnh báo', error);
-            }
-        }, 5000);
+        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    let targetUserId: number | undefined;
-    let displayName = "User";
-
-    try {
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            if (targetUser) {
-                targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-        } else {
-            const args = ctx.match.trim();
-            if (!args) {
-                const msg = await ctx.reply('⚠️ Vui lòng Reply tin nhắn hoặc nhập /mute [ID]');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-
-            if (args.startsWith('@') || isNaN(Number(args))) {
-                const msg = await ctx.reply('❌ Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User!');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-            targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
-        }
-
-        if (!targetUserId) {
-            const msg = await ctx.reply('❌ Không tìm thấy ID User.');
-            setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-            return;
-        }
-
-    } catch (error) {
-        console.log('Lỗi khối lấy ID lệnh /mute: ', error);
+    const args = ctx.match.trim().split(/\s+/).filter(a => a);
+    const userArg = ctx.message?.reply_to_message ? undefined : args[0];
+    
+    const resolved = await resolveTargetUser(ctx, userArg);
+    if (resolved.error) {
+        const msg = await ctx.reply(resolved.error);
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
 
     try {
-        await ctx.api.restrictChatMember(ctx.chat.id, targetUserId, {
-            can_send_messages: false,
-            can_send_audios: false,
-            can_send_documents: false,
-            can_send_photos: false,
-            can_send_videos: false,
-            can_send_video_notes: false,
-            can_send_voice_notes: false,
-            can_send_polls: false,
-            can_send_other_messages: false,
+        await ctx.api.restrictChatMember(ctx.chat!.id, resolved.targetUserId!, {
+            can_send_messages: false, can_send_audios: false, can_send_documents: false,
+            can_send_photos: false, can_send_videos: false, can_send_video_notes: false,
+            can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false,
             can_add_web_page_previews: false,
         });
-
-        await ctx.reply(`🤬 Shyyt: Câm miệng lại!\n✅ Muted "<b>${displayName}</b>"`, { parse_mode: 'HTML' });
-
+        await ctx.reply(`🤬 Shyyt: Câm miệng lại!\n✅ Muted "<b>${resolved.displayName}</b>"`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi API lệnh /mute: ', error);
-        await ctx.reply('⚠️ Lỗi: Không thể Mute người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng) và chức vụ cao hơn người đó!');
+        await ctx.reply('⚠️ Lỗi: Không thể Mute người này. Bot có thể chưa đủ quyền!');
     }
-})
+});
 
 // ---------------Slash unmute---------------
 BOT_TOKEN.command('unmute', async (ctx) => {
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group/Supergroup!");
+
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
     if (!isHardAdmin && !isChatAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Admin mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được cảnh báo', error);
-            }
-        }, 5000);
+        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    let targetUserId: number | undefined;
-    let displayName = "User";
-
-    try {
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            if (targetUser) {
-                targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-        } else {
-            const args = ctx.match.trim();
-            if (!args) {
-                const msg = await ctx.reply('⚠️ Vui lòng Reply tin nhắn hoặc nhập /unmute [ID]');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-
-            if (args.startsWith('@') || isNaN(Number(args))) {
-                const msg = await ctx.reply('❌ Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User!');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-            targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ?`${firstName} ${lastName}` : `@${member.user.username}` ;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
-        }
-
-        if (!targetUserId) {
-            const msg = await ctx.reply('❌ Không tìm thấy ID User.');
-            setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-            return;
-        }
-
-    } catch (error) {
-        console.log('Lỗi khối lấy ID lệnh /unmute: ', error);
+    const args = ctx.match.trim().split(/\s+/).filter(a => a);
+    const userArg = ctx.message?.reply_to_message ? undefined : args[0];
+    
+    const resolved = await resolveTargetUser(ctx, userArg);
+    if (resolved.error) {
+        const msg = await ctx.reply(resolved.error);
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
 
     try {
-        await ctx.api.restrictChatMember(ctx.chat.id, targetUserId, {
-            can_send_messages: true,
-            can_send_audios: true,
-            can_send_documents: true,
-            can_send_photos: true,
-            can_send_videos: true,
-            can_send_video_notes: true,
-            can_send_voice_notes: true,
-            can_send_polls: true,
-            can_send_other_messages: true,
+        await ctx.api.restrictChatMember(ctx.chat!.id, resolved.targetUserId!, {
+            can_send_messages: true, can_send_audios: true, can_send_documents: true,
+            can_send_photos: true, can_send_videos: true, can_send_video_notes: true,
+            can_send_voice_notes: true, can_send_polls: true, can_send_other_messages: true,
             can_add_web_page_previews: true,
         });
-
-        await ctx.reply(`"<b>${displayName}</b>" có thể chat lại bình thường!`, { parse_mode: 'HTML' });
-
+        await ctx.reply(`"<b>${resolved.displayName}</b>" có thể chat lại bình thường!`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi API lệnh /unmute: ', error);
-        await ctx.reply('⚠️ Lỗi: Không thể Unmute người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng) và chức vụ cao hơn người đó!');
+        await ctx.reply('⚠️ Lỗi: Không thể Unmute người này. Bot có thể chưa đủ quyền!');
     }
-})
+});
 
 // ---------------Slash ban---------------
 BOT_TOKEN.command('ban', async (ctx) => {
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group/Supergroup!");
+
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
     if (!isHardAdmin && !isChatAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Admin mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được cảnh báo', error);
-            }
-        }, 5000);
+        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    let targetUserId: number | undefined;
-    let displayName = "User";
-
-    try {
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            if (targetUser) {
-                targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-        } else {
-            const args = ctx.match.trim();
-            if (!args) {
-                const msg = await ctx.reply('⚠️ Vui lòng Reply tin nhắn hoặc nhập /ban [ID]');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-
-            if (args.startsWith('@') || isNaN(Number(args))) {
-                const msg = await ctx.reply('❌ Chỉ nhận truyền tham số ID (số) hoặc Reply tin nhắn. Không dùng @username!');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-            targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
-        }
-
-        if (!targetUserId) {
-            const msg = await ctx.reply('❌ Không tìm thấy ID người dùng.');
-            setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-            return;
-        }
-
-    } catch (error) {
-        console.log('Lỗi khối lấy ID lệnh /ban: ', error);
+    const args = ctx.match.trim().split(/\s+/).filter(a => a);
+    const userArg = ctx.message?.reply_to_message ? undefined : args[0];
+    
+    const resolved = await resolveTargetUser(ctx, userArg);
+    if (resolved.error) {
+        const msg = await ctx.reply(resolved.error);
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
 
     try {
-        await ctx.api.banChatMember(ctx.chat.id, targetUserId);
-        await ctx.reply(`Đã tiễn <b>${displayName}</b> ra đảo!\n\n✅ <b>Banned!</b>`, { parse_mode: 'HTML' });
-
+        await ctx.api.banChatMember(ctx.chat!.id, resolved.targetUserId!);
+        await ctx.reply(`Đã tiễn <b>${resolved.displayName}</b> ra đảo!\n\n✅ <b>Banned!</b>`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi API lệnh /ban: ', error);
-        await ctx.reply('⚠️ Lỗi: Không thể Ban người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng) và chức vụ cao hơn người đó!');
+        await ctx.reply('⚠️ Lỗi: Không thể Ban người này. Bot có thể chưa đủ quyền!');
     }
 });
 
 // ---------------Slash unban---------------
 BOT_TOKEN.command('unban', async (ctx) => {
+    if (ctx.chat?.type === 'private') return await ctx.reply("❌ Lệnh này chỉ dùng được trong Group/Supergroup!");
+
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
     if (!isHardAdmin && !isChatAdmin) {
-        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này! Chỉ Admin mới có thể dùng! ");
-        setTimeout(async () => {
-            try {
-                await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
-            } catch (error) {
-                console.log('Lỗi không xóa được cảnh báo', error);
-            }
-        }, 5000);
+        const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
-
-    // Delete Slash User
     await deleteCommandDelay(ctx, 5000);
 
-    let targetUserId: number | undefined;
-    let displayName = "User";
-
-    try {
-        if (ctx.message?.reply_to_message) {
-            const targetUser = ctx.message.reply_to_message.from;
-            if (targetUser) {
-                targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-            }
-        } else {
-            const args = ctx.match.trim();
-            if (!args) {
-                const msg = await ctx.reply('⚠️ Vui lòng Reply tin nhắn hoặc nhập /unban [ID]');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-
-            if (args.startsWith('@') || isNaN(Number(args))) {
-                const msg = await ctx.reply('❌ Chỉ nhận truyền tham số ID (số) hoặc Reply tin nhắn. Không dùng @username!');
-                setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-                return;
-            }
-            targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
-        }
-
-        if (!targetUserId) {
-            const msg = await ctx.reply('❌ Không tìm thấy ID người dùng.');
-            setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
-            return;
-        }
-
-    } catch (error) {
-        console.log('Lỗi khối lấy ID lệnh /unban: ', error);
+    const args = ctx.match.trim().split(/\s+/).filter(a => a);
+    const userArg = ctx.message?.reply_to_message ? undefined : args[0];
+    
+    const resolved = await resolveTargetUser(ctx, userArg);
+    if (resolved.error) {
+        const msg = await ctx.reply(resolved.error);
+        setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => {}), 5000);
         return;
     }
 
     try {
-        await ctx.api.unbanChatMember(ctx.chat.id, targetUserId);
-        await ctx.reply(`🙂 <b>${displayName}</b> đã được ân xá`, { parse_mode: 'HTML' });
-
+        await ctx.api.unbanChatMember(ctx.chat!.id, resolved.targetUserId!);
+        await ctx.reply(`🙂 <b>${resolved.displayName}</b> đã được ân xá`, { parse_mode: 'HTML' });
     } catch (error) {
-        console.log('Lỗi API lệnh /unban: ', error);
-        await ctx.reply('⚠️ Lỗi: Không thể Unban người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng)!');
+        await ctx.reply('⚠️ Lỗi: Không thể Unban người này.');
     }
 });
-
 
 // Start bot
 BOT_TOKEN.start({
@@ -1051,4 +624,3 @@ BOT_TOKEN.start({
         console.log(`✅ Bot @${botInfo.username} đã khởi động!!`);
     }
 });
-
