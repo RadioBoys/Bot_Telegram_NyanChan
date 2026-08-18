@@ -9,7 +9,7 @@ import { upsertUser, getIdFromUsername } from './userModel.js';
 
 dotenv.config();
 
-const BOT_TOKEN = new Bot(process.env.BOT_TOKEN_TEST || process.env.BOT_TOKEN || '');
+const BOT_TOKEN = new Bot(process.env.BOT_TOKEN || '');
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
 
 // ---------------Admin hard code---------------
