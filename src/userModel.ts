@@ -5,12 +5,12 @@ export const upsertUser = async (userId: number, username?: string, firstname?: 
     const values = [userId, username || null, fullName || ''];
 
     const query = `
-        INSERT INTO users (user_id, username, first_name, updated_at)
+        INSERT INTO users (user_id, username, full_name, updated_at)
         VALUES ($1, $2, $3, NOW())
         ON CONFLICT (user_id)
         DO UPDATE SET
             username = EXCLUDED.username,
-            first_name = EXCLUDED.first_name,
+            full_name = EXCLUDED.full_name,
             updated_at = NOW()
     `
 
