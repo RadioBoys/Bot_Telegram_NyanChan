@@ -1,20 +1,19 @@
 import { Bot, Context } from 'grammy';
 import * as dotenv from 'dotenv';
-import { upsertUser } from './userModel.js';
+import { upsertUser, getDisplayNameFromDB } from './userModel.js';
 
 dotenv.config();
 
-const BOT_TOKEN = new Bot(process.env.BOT_TOKEN || '');    // Get Bot token
-const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];         // Get Admin Id (Hard Code)
+const BOT_TOKEN = new Bot(process.env.BOT_TOKEN || '');
+// Get Admin Id (Hard Code)
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
 
 // Function check admin hard code and admin in Channel / Group
 // ---------------Admin hard code---------------
 export function isAdminHardCode(userId: number | undefined): boolean {
-    if (!userId) {
-        return false;
-    }
+    if (!userId) return false;
     return ADMIN_IDS.includes(userId);
-};
+}
 
 // ---------------Admin Channel / Group---------------
 export async function isGroupChannelAdmin(ctx: Context, userId?: number): Promise<boolean> {
@@ -25,15 +24,13 @@ export async function isGroupChannelAdmin(ctx: Context, userId?: number): Promis
     if (ctx.chat.type === 'private') return false;
 
     try {
-        // Get info member
         const member = await ctx.api.getChatMember(ctx.chat.id, targetId);
-        // Check permission of member
-        return member.status === "administrator" || member.status === "creator"
+        return member.status === "administrator" || member.status === "creator";
     } catch (err) {
         console.log('Admin Group/Channel: ', err);
         return false;
     }
-};
+}
 
 // Delete command after delay
 async function deleteCommandDelay(ctx: Context, delay: number) {
@@ -58,7 +55,7 @@ BOT_TOKEN.on('message', async (ctx, next) => {
         const lastName = user.last_name || '';
 
         try {
-            // Gọi hàm cập nhật Database
+            // Lưu/Cập nhật thông tin vào Postgres
             await upsertUser(userId, username, firstName, lastName);
         } catch (error) {
             console.error('Lỗi khi lưu user data trong luồng message: ', error);
@@ -68,16 +65,13 @@ BOT_TOKEN.on('message', async (ctx, next) => {
     await next();
 });
 
-// Bot command : /start, /help, /promote, /demote, /check, /uncheck, /checkpermission, /mute, /unmute, /ban, /unban
 // ---------------Slash start---------------
 BOT_TOKEN.command('start', async (ctx) => {
     const userId = ctx.from?.id;
-    // Check permission admin
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
     if (!isHardAdmin && !isChatAdmin) {
-        // Dành cho thành viên bình thường
         const msg = await ctx.reply("Chỉ Admin mới có thể sử dụng lệnh này!", { parse_mode: "Markdown" });
         try {
             setTimeout(async () => {
@@ -87,7 +81,6 @@ BOT_TOKEN.command('start', async (ctx) => {
             console.log('Lỗi không xóa được bảng cảnh cáo ', error);
         }
     } else {
-        // Dành cho Admin (Hardcode hoặc Group Admin)
         await ctx.reply("Muốn xem thử Bot làm được gì không? Ấn `/help` đi là biết 😏!", { parse_mode: "Markdown" });
     }
     await deleteCommandDelay(ctx, 5000);
@@ -98,7 +91,7 @@ BOT_TOKEN.command('help', async (ctx) => {
     const userId = ctx.from?.id;
 
     const helpMessage = `
-    🤖 **Danh sách lệnh quản trị của Bot:**
+🤖 **Danh sách lệnh quản trị của Bot:**
 
 1. /start - Kiểm tra trạng thái bot.
 2. /promote [id, reply] - Cấp quyền Admin cho User.
@@ -107,18 +100,17 @@ BOT_TOKEN.command('help', async (ctx) => {
 5. /checkpermission [id, reply] - Kiểm tra quyền Admin của User.
 6. /help - Hiển thị bảng hướng dẫn này.
 
-⚠️ **Lưu ý:** - Bạn cần Reply tin nhắn của thành viên khi dùng /promote hoặc /demote.
+⚠️ **Lưu ý:**
+- Bạn cần Reply tin nhắn của thành viên khi dùng /promote hoặc /demote.
 - Bot chỉ thực hiện lệnh nếu bạn nằm trong danh sách Admin được chỉ định.
     `;
 
     try {
-        // Check permission admin
         const isHardAdmin = isAdminHardCode(userId);
         const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
 
         if (!isHardAdmin && !isChatAdmin) {
             const msg = await ctx.reply("❌ Bạn không có quyền sử dụng lệnh này!");
-
             setTimeout(async () => {
                 try {
                     await ctx.api.deleteMessage(ctx.chat.id, msg.message_id);
@@ -126,13 +118,11 @@ BOT_TOKEN.command('help', async (ctx) => {
                     console.log('Lỗi không xóa được bảng help:', err);
                 }
             }, 5000);
-
             return;
         }
-        // Delete slash user
+
         await deleteCommandDelay(ctx, 5000);
         await ctx.reply(helpMessage);
-
     } catch (err) {
         console.log('Lỗi lệnh /help: ', err);
         try {
@@ -145,7 +135,6 @@ BOT_TOKEN.command('help', async (ctx) => {
 
 // ---------------Slash promote---------------
 BOT_TOKEN.command('promote', async (ctx) => {
-    // Only hard code Admin can do this
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
 
@@ -160,45 +149,29 @@ BOT_TOKEN.command('promote', async (ctx) => {
         }, 5000);
         return;
     }
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    // Get ID User from reply message OR /promote [ID]
     let targetUserId: number | undefined;
-    let displayName = "User"; // <--- THÊM BIẾN TÊN HIỂN THỊ
+    let displayName = "User";
 
     try {
         if (ctx.message?.reply_to_message) {
             const targetUser = ctx.message.reply_to_message.from;
-            const firstName = targetUser?.first_name || '';
-            const lastName = targetUser?.last_name || '';
             if (targetUser) {
-                targetUserId = targetUser.id;   // Get ID User from Reply Message
-                displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
+                targetUserId = targetUser.id;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
         } else {
             const args = ctx.match.trim();
             if (!args) {
                 return await ctx.reply('Reply tin nhắn hoặc nhập /promote [ID]');
             }
-
             if (args.startsWith('@') || isNaN(Number(args))) {
                 return await ctx.reply('Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User');
             }
-            targetUserId = Number(args);    // Get ID User from /promote [ID]
-
-            // <--- THÊM LOGIC GỌI API LẤY TÊN NẾU NHẬP BẰNG ID --->
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const targetUser = member.user;
-                    const firstName = targetUser?.first_name || '';
-                    const lastName = targetUser?.last_name || '';
-                    displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`; // Đề phòng lỗi
-                }
-            }
+            targetUserId = Number(args);
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
 
         if (!targetUserId) {
@@ -210,7 +183,6 @@ BOT_TOKEN.command('promote', async (ctx) => {
     }
 
     try {
-        // Add permission Admin
         await ctx.api.promoteChatMember(ctx.chat.id, targetUserId, {
             can_manage_chat: true,
             can_post_messages: false,
@@ -228,18 +200,15 @@ BOT_TOKEN.command('promote', async (ctx) => {
             can_delete_stories: false,
             is_anonymous: false
         });
-        // <--- ĐỔI targetUserId THÀNH displayName Ở ĐÂY --->
         await ctx.reply(`✅ Đã cấp quyền Admin cho <b>${displayName}</b>`, { parse_mode: 'HTML' });
     } catch (error) {
         console.log('Lỗi lệnh /promote: ', error);
         return await ctx.reply('⚠️ Lỗi: Không thể cấp quyền Admin');
     }
-
 });
 
 // ---------------Slash demote---------------
 BOT_TOKEN.command('demote', async (ctx) => {
-    // ONLY hardcode admin can do this
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
 
@@ -254,51 +223,34 @@ BOT_TOKEN.command('demote', async (ctx) => {
         }, 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    // Get ID User from reply message OR /demote [ID]
     let targetUserId: number | undefined;
     let displayName = "User";
 
     try {
         if (ctx.message?.reply_to_message) {
             const targetUser = ctx.message.reply_to_message.from;
-            const firstName = targetUser?.first_name || '';
-            const lastName = targetUser?.last_name || '';
             if (targetUser) {
-                targetUserId = targetUser.id;   // Get ID User from Reply Message
-                displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
+                targetUserId = targetUser.id;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
-        } else { // <--- Đã đưa else ra ngoài cho ngang hàng với if reply
+        } else {
             const args = ctx.match.trim();
             if (!args) {
                 return await ctx.reply('Reply tin nhắn hoặc nhập /demote [ID]');
             }
-
             if (args.startsWith('@') || isNaN(Number(args))) {
                 return await ctx.reply('Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User');
             }
-            targetUserId = Number(args);    // Get ID User from /demote [ID]
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const targetUser = member.user;
-                    const firstName = targetUser?.first_name || '';
-                    const lastName = targetUser?.last_name || '';
-                    displayName = targetUser.username ?`${firstName} ${lastName}` : `@${targetUser.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+            targetUserId = Number(args);
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
 
         if (!targetUserId) {
             return ctx.reply('Không tìm thấy ID User ');
         }
-
     } catch (error) {
         console.log('Lỗi lệnh /demote: ', error);
         return;
@@ -321,9 +273,8 @@ BOT_TOKEN.command('demote', async (ctx) => {
             can_edit_stories: false,
             can_delete_stories: false,
             is_anonymous: false
-        })
+        });
         await ctx.reply(`✅ Gỡ Admin <b>${displayName}</b> thành công`, { parse_mode: 'HTML' });
-
     } catch (error) {
         console.log('Lỗi lệnh /demote: ', error);
         return await ctx.reply('⚠️ Lỗi: Không thể gỡ quyền Admin');
@@ -332,7 +283,6 @@ BOT_TOKEN.command('demote', async (ctx) => {
 
 // ---------------Slash check---------------
 BOT_TOKEN.command('check', async (ctx) => {
-    // Only Hard Code Admin can do this
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
 
@@ -347,8 +297,6 @@ BOT_TOKEN.command('check', async (ctx) => {
         }, 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
     let targetUserId: number | undefined;
@@ -374,27 +322,21 @@ BOT_TOKEN.command('check', async (ctx) => {
     };
 
     try {
-        // Split remove space
         const args = ctx.match.trim().split(/\s+/).filter(a => a);
-
-        // If reply
         if (ctx.message?.reply_to_message) {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
-            requestedPerms = args;  //If reply, All text is a request
+            requestedPerms = args;
         } else {
-            // If user enter have [ID]
             if (args.length < 2) {
                 return await ctx.reply(`⚠️ Không nhận diện được quyền nào.\nCác quyền hợp lệ: \n<code>${Object.keys(rightMap).join('\n')}\n\nall - Tất cả quyền</code>`, { parse_mode: 'HTML' });
-
             }
 
-            const idArg = args[0];  // Get ID User;
+            const idArg = args[0];
             if (!idArg) {
                 return await ctx.reply("Truyền đúng ID User hoặc reply tin nhắn User!");
             }
@@ -403,19 +345,9 @@ BOT_TOKEN.command('check', async (ctx) => {
             }
             targetUserId = Number(idArg);
             requestedPerms = args.slice(1);
-
-            // Get name of User
-            if (ctx.chat) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
+
         if (!targetUserId || !ctx.chat) {
             return await ctx.reply('❌ Không tìm thấy ID User.');
         }
@@ -425,9 +357,7 @@ BOT_TOKEN.command('check', async (ctx) => {
             return await ctx.reply("Owner luôn full quyền");
         }
 
-        // Create permission and doesn't lost previous permission
         const newPermission: any = { can_manage_topics: false, is_anonymous: false };
-
         if (member.status === 'administrator') {
             for (const key of Object.values(rightMap)) {
                 newPermission[key] = (member as any)[key] || false;
@@ -438,14 +368,12 @@ BOT_TOKEN.command('check', async (ctx) => {
             }
         }
 
-        // Tick permission
         let updatedCount = 0;
         const isAll = requestedPerms.map(p => p.toLowerCase()).includes('all');
 
         if (isAll) {
             for (const key of Object.values(rightMap)) {
                 if (key === "can_manage_topics") {
-                    // Kiểm tra xem nhóm hiện tại có phải là Supergroup và có bật tính năng Topic (Forum) không
                     if (ctx.chat && ctx.chat.type === 'supergroup' && ctx.chat.is_forum) {
                         newPermission[key] = true;
                     } else {
@@ -455,7 +383,6 @@ BOT_TOKEN.command('check', async (ctx) => {
                     newPermission[key] = true;
                 }
             }
-            // Đếm linh hoạt số lượng quyền thực tế đã được set thành true
             updatedCount = Object.values(newPermission).filter(v => v === true).length;
         } else {
             for (const p of requestedPerms) {
@@ -466,20 +393,21 @@ BOT_TOKEN.command('check', async (ctx) => {
                 }
             }
         }
+
         if (updatedCount === 0) {
             return await ctx.reply(`⚠️ Không nhận diện được quyền nào.\nCác quyền hợp lệ: <code>${Object.keys(rightMap).join(', ')}, all</code>`, { parse_mode: 'HTML' });
         }
+
         await ctx.api.promoteChatMember(ctx.chat.id, targetUserId, newPermission);
         await ctx.reply(`✅ Đã tick thêm <b>${isAll ? 'TẤT CẢ' : updatedCount}</b> quyền cho Admin <b>${displayName}</b>!`, { parse_mode: 'HTML' });
     } catch (error) {
         console.log('Lỗi lệnh /check: ', error);
         return await ctx.reply('⚠️ Lỗi: Không thể sửa quyền cho người này. Đảm bảo Bot có đủ quyền hạn và cao hơn chức vụ của người đó!');
     }
-})
+});
 
 // ---------------Slash uncheck---------------
 BOT_TOKEN.command('uncheck', async (ctx) => {
-    // Only Hard Code Admin can do this
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
 
@@ -494,8 +422,6 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
         }, 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
     let targetUserId: number | undefined;
@@ -522,14 +448,12 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
 
     try {
         const args = ctx.match.trim().split(/\s+/).filter(a => a);
-
         if (ctx.message?.reply_to_message) {
             const targetUser = ctx.message.reply_to_message.from;
-            const firstName = targetUser?.first_name || '';
-            const lastName = targetUser?.last_name || '';
             if (targetUser) {
                 targetUserId = targetUser.id;
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
             requestedPerms = args;
         } else {
@@ -546,17 +470,7 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
             }
             targetUserId = Number(idArg);
             requestedPerms = args.slice(1);
-
-            if (ctx.chat) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
 
         if (!targetUserId || !ctx.chat) {
@@ -564,7 +478,6 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
         }
 
         const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
         if (member.status === 'creator') {
             return await ctx.reply("❌ Owner luôn full quyền, không thể gỡ (Uncheck)!");
         }
@@ -574,25 +487,20 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
         }
 
         const newPermission: any = { can_manage_topics: false, is_anonymous: false };
-
         for (const key of Object.values(rightMap)) {
             newPermission[key] = (member as any)[key] || false;
         }
 
         let removedCount = 0;
         const isAll = requestedPerms.map(p => p.toLowerCase()).includes('all');
-
         if (isAll) {
-            // Nếu là all, cho tất cả về false
             for (const key of Object.values(rightMap)) {
                 newPermission[key] = false;
             }
-
             removedCount = Object.values(rightMap).filter(key => (member as any)[key] === true).length;
         } else {
             for (const p of requestedPerms) {
                 const permKey = rightMap[p.toLowerCase()];
-
                 if (permKey && newPermission[permKey] === true) {
                     newPermission[permKey] = false;
                     removedCount++;
@@ -606,15 +514,14 @@ BOT_TOKEN.command('uncheck', async (ctx) => {
 
         await ctx.api.promoteChatMember(ctx.chat.id, targetUserId, newPermission);
         await ctx.reply(`✅ Đã gỡ bỏ <b>${isAll ? 'TẤT CẢ' : removedCount}</b> quyền của Admin <b>${displayName}</b>!`, { parse_mode: 'HTML' });
-
     } catch (error) {
         console.log('Lỗi lệnh /uncheck: ', error);
         return await ctx.reply('⚠️ Lỗi: Không thể sửa quyền cho người này. Đảm bảo Bot có đủ quyền hạn và cao hơn chức vụ của người đó!');
     }
 });
+
 // ---------------Slash checkpermission---------------
 BOT_TOKEN.command('checkpermission', async (ctx) => {
-    // Only Admin can do this
     const userId = ctx.from?.id;
     const isHardAdmin = isAdminHardCode(userId);
     const isChatAdmin = await isGroupChannelAdmin(ctx, userId);
@@ -630,24 +537,29 @@ BOT_TOKEN.command('checkpermission', async (ctx) => {
         }, 5000);
         return;
     }
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
-    // Get ID User from reply message OR /promote [ID]
     let targetUserId: number | undefined;
+    let displayName = "User";
+
     try {
-        // Get ID user from reply message
         if (ctx.message?.reply_to_message) {
-            targetUserId = ctx.message.reply_to_message.from?.id;
+            const targetUser = ctx.message.reply_to_message.from;
+            if (targetUser) {
+                targetUserId = targetUser.id;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
+            }
         } else {
-            const agrs = ctx.match.trim();
-            if (!agrs) {
+            const args = ctx.match.trim();
+            if (!args) {
                 return await ctx.reply('Reply tin nhắn hoặc nhập /checkpermission [ID]');
             }
-            if (agrs.startsWith('@') || isNaN(Number(agrs))) {
+            if (args.startsWith('@') || isNaN(Number(args))) {
                 return await ctx.reply('Chỉ nhận truyền tham số ID hoặc Reply tin nhắn User');
             }
-            targetUserId = Number(agrs);
+            targetUserId = Number(args);
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
         if (!targetUserId) {
             return await ctx.reply('Không tìm thấy ID User');
@@ -659,14 +571,7 @@ BOT_TOKEN.command('checkpermission', async (ctx) => {
 
     try {
         const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
-        const targetUser = member.user;
-        const firstName = targetUser.first_name || '';
-        const lastName = targetUser.last_name || '';
-        const displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
-
-        let response = `📋  Quyền hạn của ${displayName} gồm:\n\n`;
-
+        let response = `📋 Quyền hạn của <b>${displayName}</b> gồm:\n\n`;
         const permissionMap: { [key: string]: string } = {
             can_manage_chat: "Quản lý nhóm",
             can_delete_messages: "Xóa tin nhắn",
@@ -682,13 +587,12 @@ BOT_TOKEN.command('checkpermission', async (ctx) => {
             can_delete_stories: "Xóa Stories",
             is_anonymous: "Ẩn danh"
         };
-
         for (const [key, label] of Object.entries(permissionMap)) {
             const hasRight = (member as any)[key] === true;
             response += `${hasRight ? "✅" : "❌"} ${label}\n`;
         }
 
-        ctx.reply(response, { parse_mode: "Markdown" });
+        ctx.reply(response, { parse_mode: "HTML" });
     } catch (e) {
         ctx.reply("Lỗi: Không thể lấy thông tin người này. Bot có thể chưa được cấp quyền.");
     }
@@ -711,8 +615,6 @@ BOT_TOKEN.command('mute', async (ctx) => {
         }, 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
     let targetUserId: number | undefined;
@@ -723,9 +625,8 @@ BOT_TOKEN.command('mute', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
         } else {
             const args = ctx.match.trim();
@@ -741,17 +642,7 @@ BOT_TOKEN.command('mute', async (ctx) => {
                 return;
             }
             targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
 
         if (!targetUserId) {
@@ -759,7 +650,6 @@ BOT_TOKEN.command('mute', async (ctx) => {
             setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
             return;
         }
-
     } catch (error) {
         console.log('Lỗi khối lấy ID lệnh /mute: ', error);
         return;
@@ -778,14 +668,12 @@ BOT_TOKEN.command('mute', async (ctx) => {
             can_send_other_messages: false,
             can_add_web_page_previews: false,
         });
-
         await ctx.reply(`🤬 Shyyt: Câm miệng lại!\n✅ Muted "<b>${displayName}</b>"`, { parse_mode: 'HTML' });
-
     } catch (error) {
         console.log('Lỗi API lệnh /mute: ', error);
         await ctx.reply('⚠️ Lỗi: Không thể Mute người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng) và chức vụ cao hơn người đó!');
     }
-})
+});
 
 // ---------------Slash unmute---------------
 BOT_TOKEN.command('unmute', async (ctx) => {
@@ -804,8 +692,6 @@ BOT_TOKEN.command('unmute', async (ctx) => {
         }, 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
     let targetUserId: number | undefined;
@@ -816,9 +702,8 @@ BOT_TOKEN.command('unmute', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
         } else {
             const args = ctx.match.trim();
@@ -834,17 +719,7 @@ BOT_TOKEN.command('unmute', async (ctx) => {
                 return;
             }
             targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ?`${firstName} ${lastName}` : `@${member.user.username}` ;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
 
         if (!targetUserId) {
@@ -852,7 +727,6 @@ BOT_TOKEN.command('unmute', async (ctx) => {
             setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
             return;
         }
-
     } catch (error) {
         console.log('Lỗi khối lấy ID lệnh /unmute: ', error);
         return;
@@ -871,14 +745,12 @@ BOT_TOKEN.command('unmute', async (ctx) => {
             can_send_other_messages: true,
             can_add_web_page_previews: true,
         });
-
         await ctx.reply(`"<b>${displayName}</b>" có thể chat lại bình thường!`, { parse_mode: 'HTML' });
-
     } catch (error) {
         console.log('Lỗi API lệnh /unmute: ', error);
         await ctx.reply('⚠️ Lỗi: Không thể Unmute người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng) và chức vụ cao hơn người đó!');
     }
-})
+});
 
 // ---------------Slash ban---------------
 BOT_TOKEN.command('ban', async (ctx) => {
@@ -897,8 +769,6 @@ BOT_TOKEN.command('ban', async (ctx) => {
         }, 5000);
         return;
     }
-
-    // Delete slash user
     await deleteCommandDelay(ctx, 5000);
 
     let targetUserId: number | undefined;
@@ -909,9 +779,8 @@ BOT_TOKEN.command('ban', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
         } else {
             const args = ctx.match.trim();
@@ -927,18 +796,7 @@ BOT_TOKEN.command('ban', async (ctx) => {
                 return;
             }
             targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
 
         if (!targetUserId) {
@@ -946,7 +804,6 @@ BOT_TOKEN.command('ban', async (ctx) => {
             setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
             return;
         }
-
     } catch (error) {
         console.log('Lỗi khối lấy ID lệnh /ban: ', error);
         return;
@@ -955,7 +812,6 @@ BOT_TOKEN.command('ban', async (ctx) => {
     try {
         await ctx.api.banChatMember(ctx.chat.id, targetUserId);
         await ctx.reply(`Đã tiễn <b>${displayName}</b> ra đảo!\n\n✅ <b>Banned!</b>`, { parse_mode: 'HTML' });
-
     } catch (error) {
         console.log('Lỗi API lệnh /ban: ', error);
         await ctx.reply('⚠️ Lỗi: Không thể Ban người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng) và chức vụ cao hơn người đó!');
@@ -979,8 +835,6 @@ BOT_TOKEN.command('unban', async (ctx) => {
         }, 5000);
         return;
     }
-
-    // Delete Slash User
     await deleteCommandDelay(ctx, 5000);
 
     let targetUserId: number | undefined;
@@ -991,9 +845,8 @@ BOT_TOKEN.command('unban', async (ctx) => {
             const targetUser = ctx.message.reply_to_message.from;
             if (targetUser) {
                 targetUserId = targetUser.id;
-                const firstName = targetUser.first_name || '';
-                const lastName = targetUser.last_name || '';
-                displayName = targetUser.username ? `${firstName} ${lastName}` : `@${targetUser.username}`;
+                const fallbackFull = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+                displayName = await getDisplayNameFromDB(targetUserId, targetUser.username, fallbackFull);
             }
         } else {
             const args = ctx.match.trim();
@@ -1009,18 +862,7 @@ BOT_TOKEN.command('unban', async (ctx) => {
                 return;
             }
             targetUserId = Number(args);
-
-            if (ctx.chat && targetUserId) {
-                try {
-                    const member = await ctx.api.getChatMember(ctx.chat.id, targetUserId);
-
-                    const firstName = member.user.first_name || '';
-                    const lastName = member.user.last_name || '';
-                    displayName = member.user.username ? `${firstName} ${lastName}` : `@${member.user.username}`;
-                } catch (error) {
-                    displayName = `ID ${targetUserId}`;
-                }
-            }
+            displayName = await getDisplayNameFromDB(targetUserId);
         }
 
         if (!targetUserId) {
@@ -1028,7 +870,6 @@ BOT_TOKEN.command('unban', async (ctx) => {
             setTimeout(() => ctx.api.deleteMessage(ctx.chat!.id, msg.message_id).catch(() => { }), 5000);
             return;
         }
-
     } catch (error) {
         console.log('Lỗi khối lấy ID lệnh /unban: ', error);
         return;
@@ -1037,13 +878,11 @@ BOT_TOKEN.command('unban', async (ctx) => {
     try {
         await ctx.api.unbanChatMember(ctx.chat.id, targetUserId);
         await ctx.reply(`🙂 <b>${displayName}</b> đã được ân xá`, { parse_mode: 'HTML' });
-
     } catch (error) {
         console.log('Lỗi API lệnh /unban: ', error);
         await ctx.reply('⚠️ Lỗi: Không thể Unban người này. Đảm bảo Bot có quyền "Ban Users" (Chặn người dùng)!');
     }
 });
-
 
 // Start bot
 BOT_TOKEN.start({
@@ -1051,4 +890,3 @@ BOT_TOKEN.start({
         console.log(`✅ Bot @${botInfo.username} đã khởi động!!`);
     }
 });
-
