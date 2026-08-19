@@ -1,7 +1,3 @@
-// ==========================================
-// FILE: ./src/indexBotAdmin.ts
-// ==========================================
-
 import { Bot, Context } from 'grammy';
 import * as dotenv from 'dotenv';
 // Cập nhật import thêm hàm getIdFromUsername từ userModel
@@ -120,6 +116,47 @@ BOT_TOKEN.on('message', async (ctx, next) => {
         }
     }
     await next();
+});
+
+// ---------------BẮT SỰ KIỆN: NGƯỜI MỚI JOIN NHÓM (CÔNG KHAI HOẶC BỊ ADD)---------------
+BOT_TOKEN.on('message:new_chat_members', async (ctx) => {
+    const newMembers = ctx.message.new_chat_members;
+    
+    for (const member of newMembers) {
+        // Bỏ qua nếu người mới vào lại chính là một con Bot khác
+        if (!member.is_bot) {
+            try {
+                await upsertUser(
+                    member.id, 
+                    member.username || '', 
+                    member.first_name || '', 
+                    member.last_name || ''
+                );
+            } catch (error) {
+                console.error('Lỗi khi lưu new member vào DB: ', error);
+            }
+        }
+    }
+});
+
+// ---------------BẮT SỰ KIỆN: DUYỆT JOIN REQUESTS (NHÓM KÍN)---------------
+BOT_TOKEN.on('chat_member', async (ctx) => {
+    const newMemberUpdate = ctx.chatMember.new_chat_member;
+    const member = newMemberUpdate.user;
+
+    // Chỉ lưu khi trạng thái của họ chuyển thành 'member' (được duyệt thành công)
+    if (newMemberUpdate.status === 'member' && !member.is_bot) {
+        try {
+            await upsertUser(
+                member.id, 
+                member.username || '', 
+                member.first_name || '', 
+                member.last_name || ''
+            );
+        } catch (error) {
+            console.error('Lỗi khi lưu Join Request member vào DB: ', error);
+        }
+    }
 });
 
 
